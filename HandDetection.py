@@ -59,6 +59,5 @@ while True:
 
     cv2.imshow("image", img)
     cv2.waitKey(1)
-
 cv2.release()
 cv2.destroyAllWindows()
