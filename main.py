@@ -16,8 +16,10 @@ import mediapipe as mp
 import numpy as np
 from pynput.keyboard import Controller, Key
 
-ROOT = Path(__file__).resolve().parents[1]
-MODEL_ROOT = ROOT / 'hand-gesture-recognition-mediapipe'
+#ROOT = Path(__file__).resolve().parents[1]
+HERE = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parent
+MODEL_ROOT = ROOT
 if not (MODEL_ROOT / 'model').exists():
     MODEL_ROOT = ROOT
 if str(MODEL_ROOT) not in sys.path:
@@ -27,14 +29,20 @@ from model import KeyPointClassifier
 MODEL = MODEL_ROOT / 'model/keypoint_classifier/keypoint_classifier.tflite'
 LABELS = MODEL_ROOT / 'model/keypoint_classifier/keypoint_classifier_label.csv'
 # These are provisional bindings: match them to the actual game's controls.
+# Key bindings
+#   Crouch    -> hold 'a'            (releasing 'a' IS the jump, so Jump has no key of its own)
+#   LeftSpin  -> tap Left arrow      (only while in the air, i.e. after a jump)
+#   RightSpin -> tap Right arrow     (only while in the air)
+#   Neutral   -> tap Down arrow      (once, when you return to neutral after a jump; also the speed key)
 GESTURE_KEYS = {
-    'Crouch': Key.down,
-    'Jump': Key.space,
-    'LeftSpin': Key.left,
-    'RightSpin': Key.right,
+   'Crouch': 'a',
+   'LeftSpin': Key.left,
+   'RightSpin': Key.right,
+   'Neutral': Key.down,
 }
 HOLD_GESTURES = {'Crouch'}
-TAP_GESTURES = {'Jump', 'LeftSpin', 'RightSpin'}
+TAP_GESTURES = {'LeftSpin', 'RightSpin'}
+
 
 
 def parse_args():
@@ -88,53 +96,65 @@ class GestureStabilizer:
 
 
 class GameInputController:
-    def __init__(self, dry_run=False, tap_cooldown=0.3):
-        self.keyboard = None if dry_run else Controller()
-        self.held = None
-        self.last_gesture = 'Neutral'
-        self.last_tap_at = -float('inf')
-        self.tap_cooldown = tap_cooldown
+   def __init__(self, dry_run=False, tap_cooldown=0.3):
+       self.keyboard = None if dry_run else Controller()
+       self.held = None
+       self.last_gesture = 'Neutral'
+       self.last_tap_at = -float('inf')
+       self.tap_cooldown = tap_cooldown
+       self.in_air = False          # True from the moment 'a' is released (jump) until Neutral
+ 
+   def key_down(self, key):
+       if self.keyboard:
+           self.keyboard.press(key)
+       else:
+           print(f'PRESS {key}')
+ 
+   def key_up(self, key):
+       if self.keyboard:
+           self.keyboard.release(key)
+       else:
+           print(f'RELEASE {key}')
+ 
+   def tap(self, key):
+       self.key_down(key)
+       try:
+           time.sleep(0.04)
+       finally:
+           self.key_up(key)
+ 
+   def release_held(self):
+       if self.held is not None:
+           self.key_up(GESTURE_KEYS[self.held])
+           self.held = None
+ 
+   def update(self, gesture, hand_visible=True):
+       # Crouch = hold 'a'. Any other gesture lets go of 'a', which is the jump.
+       if gesture in HOLD_GESTURES:
+           if gesture != self.held:
+               self.release_held()
+               self.key_down(GESTURE_KEYS[gesture])
+               self.held = gesture
+       elif self.held is not None:
+           self.release_held()
+           self.in_air = hand_visible
+ 
+       now = time.monotonic()
+       changed = gesture != self.last_gesture
+       if hand_visible and changed and self.in_air:
+           if gesture in TAP_GESTURES and now - self.last_tap_at >= self.tap_cooldown:
+               self.tap(GESTURE_KEYS[gesture])          # spin, only during a jump
+               self.last_tap_at = now
+           elif gesture == 'Neutral':
+               self.tap(GESTURE_KEYS['Neutral'])        # back to neutral after the jump
+               self.in_air = False
+       if not hand_visible:
+           self.in_air = False                          # lost the hand: never leave a stuck state
+       self.last_gesture = gesture
+ 
+   def stop(self):
+       self.release_held()
 
-    def key_down(self, key):
-        if self.keyboard:
-            self.keyboard.press(key)
-        else:
-            print(f'PRESS {key}')
-
-    def key_up(self, key):
-        if self.keyboard:
-            self.keyboard.release(key)
-        else:
-            print(f'RELEASE {key}')
-
-    def release_held(self):
-        if self.held is not None:
-            self.key_up(GESTURE_KEYS[self.held])
-            self.held = None
-
-    def update(self, gesture):
-        if gesture in HOLD_GESTURES:
-            if gesture != self.held:
-                self.release_held()
-                self.key_down(GESTURE_KEYS[gesture])
-                self.held = gesture
-        else:
-            self.release_held()
-
-        now = time.monotonic()
-        if gesture in TAP_GESTURES and gesture != self.last_gesture:
-            if now - self.last_tap_at >= self.tap_cooldown:
-                key = GESTURE_KEYS[gesture]
-                self.key_down(key)
-                try:
-                    time.sleep(0.04)
-                finally:
-                    self.key_up(key)
-                self.last_tap_at = now
-        self.last_gesture = gesture
-
-    def stop(self):
-        self.release_held()
 
 
 def main():
@@ -170,7 +190,7 @@ def main():
                 ok, image = cap.read()
                 if not ok:
                     stabilizer.reset()
-                    controller.update('Neutral')
+                    controller.update('Neutral', hand_visible=False)
                     time.sleep(0.02)
                     continue
                 # Match the horizontally mirrored preprocessing used by app.py during data collection.
@@ -180,7 +200,7 @@ def main():
                 result = hands.process(rgb)
                 if not result.multi_hand_landmarks:
                     stabilizer.reset()
-                    controller.update('Neutral')
+                    controller.update('Neutral', hand_visible=False)
                     continue
                 features = preprocess_keypoints(image, result.multi_hand_landmarks[0])
                 # Invoke TFLite directly; compatible with both old and new classifier wrappers.
