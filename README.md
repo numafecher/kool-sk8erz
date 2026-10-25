@@ -136,6 +136,7 @@ Constructed with pure caffeine and dial-up energy at **HackNotts '26**:
 * **Numa Fecher** ([@numafecher](https://github.com/numafecher))
 * **Eaint Swe** ([@freyabytes](https://github.com/freyabytes))
 * **Dylan Lim** ([@dylanlim27](https://github.com/dylanlim27))
+* **Stuti Gupta** ([@sg6-purple](https://github.com/sg6-purple))
 
 ---
 
